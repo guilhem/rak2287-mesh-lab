@@ -1,0 +1,119 @@
+diff --git a/integration/repeater.cpp b/integration/repeater.cpp
+index 18be0e1..a6749e3 100644
+--- a/integration/repeater.cpp
++++ b/integration/repeater.cpp
+@@ -1,4 +1,5 @@
+ #include "MyMesh.h"
++#include "broker_radio.h"
+ #include "repeater_queue.h"
+ #include "sx1250_rx.h"
+ #include "sx1250_tx.h"
+@@ -21,10 +22,17 @@ static constexpr sx1250_rx_config profile{869618000, 62500, 16, 8, 8, 0x12, true
+ class Radio : public ExternalRadio {
+     bool txDone = false;
+     bool deferred = false;
++    BrokerRadio broker;
+ 
+ public:
+     int failure = 0;
+     unsigned busyDeferrals = 0;
++    int open(const char *path, bool useBroker) {
++        return useBroker ? broker.open(path) : sx1250_rx_open(path, &profile);
++    }
++    int close() {
++        return broker.connected() ? broker.close() : sx1250_rx_close();
++    }
+     uint32_t getEstAirtimeFor(int len) override {
+         return len > 0 && len <= UINT8_MAX ? sx1250_lora_airtime_ms(&profile, len) : 0;
+     }
+@@ -35,6 +43,7 @@ public:
+     }
+     bool isReceiving() override {
+         if (failure || stopping) return true;
++        if (broker.connected()) return broker.hasPending();
+         int activity = sx1250_rx_activity();
+         if (activity < 0) {
+             failure = errno;
+@@ -46,7 +55,7 @@ public:
+     int recvRaw(uint8_t* dest, int capacity) override {
+         if (failure || stopping) return 0;
+         sx1250_rx_packet p{};
+-        int n = sx1250_rx_next(&p, 0);
++        int n = broker.connected() ? broker.next(p) : sx1250_rx_next(&p, 0);
+         if (n < 0) {
+             failure = errno;
+             std::perror("sx1250_rx_next");
+@@ -70,25 +79,28 @@ public:
+         // Serialized driver operation: success means RF0 TxDone AND RF1 rearmed.
+         const unsigned timeout = 2 * getEstAirtimeFor(len) + 500;
+         sx1250_handoff_report handoff{};
+-        int rc = sx1250_tx_send_report(data, len, timeout, &handoff);
++        int rc = broker.connected() ? broker.sendPacket(data, len, 12000) :
++                 sx1250_tx_send_report(data, len, timeout, &handoff);
+         const int error = rc < 0 ? errno : 0;
+         if (error == EAGAIN) {
+             deferred = true;
+             ++busyDeferrals;
+             return false;
+         }
+-        std::printf("RADIO_TX bytes=%d rf1_downtime_ns=%" PRId64
+-                    " tx_started=%d tx_done=%d rf1_rearmed=%d cold_recovery=%d stage=%s error=%d"
+-                    " payload_type=%d\n",
+-                    len, handoff.downtime_ns, handoff.tx_started, handoff.tx_done,
+-                    handoff.rf1_rearmed, handoff.cold_recovery,
+-                    handoff.failed_stage ? handoff.failed_stage : "none", error,
+-                    (data[0] >> PH_TYPE_SHIFT) & PH_TYPE_MASK);
+-        std::fflush(stdout);
++        if (!broker.connected()) {
++            std::printf("RADIO_TX bytes=%d rf1_downtime_ns=%" PRId64
++                        " tx_started=%d tx_done=%d rf1_rearmed=%d cold_recovery=%d stage=%s error=%d"
++                        " payload_type=%d\n",
++                        len, handoff.downtime_ns, handoff.tx_started, handoff.tx_done,
++                        handoff.rf1_rearmed, handoff.cold_recovery,
++                        handoff.failed_stage ? handoff.failed_stage : "none", error,
++                        (data[0] >> PH_TYPE_SHIFT) & PH_TYPE_MASK);
++            std::fflush(stdout);
++        }
+         if (rc < 0) {
+             failure = error;
+             errno = error;
+-            std::perror("sx1250_tx_send");
++            std::perror(broker.connected() ? "broker send" : "sx1250_tx_send");
+             return false;
+         }
+         txDone = true;
+@@ -153,9 +165,10 @@ static bool identity(int dir, mesh::LocalIdentity& id, KernelRandom& rng) {
+ }
+ 
+ int main(int argc, char** argv) {
++    bool useBroker = argc == 4 && !std::strcmp(argv[2], "--socket");
+     if (argc != 4 || std::strcmp(argv[1], "--enable-transmit") ||
+-        std::strcmp(argv[2], "--device") || !*argv[3]) {
+-        std::fputs("Usage: meshcore-radio-repeater --enable-transmit --device SPI_PATH\n", stderr);
++        (!useBroker && std::strcmp(argv[2], "--device")) || !*argv[3]) {
++        std::fputs("Usage: meshcore-radio-repeater --enable-transmit (--device SPI_PATH | --socket SOCKET_PATH)\n", stderr);
+         return 2;
+     }
+     std::signal(SIGTERM, stop);
+@@ -181,8 +194,8 @@ int main(int argc, char** argv) {
+     for (unsigned n : mesh.self_id.pub_key) std::printf("%02x", n);
+     std::puts("");
+     std::fflush(stdout);
+-    if (sx1250_rx_open(argv[3], &profile) < 0) {
+-        std::perror("sx1250_rx_open");
++    if (physical.open(argv[3], useBroker) < 0) {
++        std::perror(useBroker ? "broker connect" : "sx1250_rx_open");
+         return 1;
+     }
+     rtc_clock.setCurrentTime(std::time(nullptr));
+@@ -207,8 +220,8 @@ int main(int argc, char** argv) {
+         mesh.loop();
+         usleep(2000);
+     }
+-    int closed = sx1250_rx_close();
+-    if (closed) std::perror("sx1250_rx_close");
++    int closed = physical.close();
++    if (closed) std::perror(useBroker ? "broker close" : "sx1250_rx_close");
+     std::printf("SUMMARY received=%u flood=%u direct=%u flood_dups=%u direct_dups=%u "
+                 "rejected=%u sent=%u flood_tx=%u direct_tx=%u busy_deferrals=%u\n",
+                 physical.getPacketsRecv(), mesh.getNumRecvFlood(), mesh.getNumRecvDirect(),

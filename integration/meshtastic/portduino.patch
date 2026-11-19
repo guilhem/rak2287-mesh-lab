@@ -1,0 +1,66 @@
+diff --git a/src/mesh/RadioInterface.cpp b/src/mesh/RadioInterface.cpp
+index 7a84b89..0947d6f 100644
+--- a/src/mesh/RadioInterface.cpp
++++ b/src/mesh/RadioInterface.cpp
+@@ -21,6 +21,7 @@
+ #include "meshUtils.h" // for pow_of_2
+ #include "sleep.h"
+ #include <assert.h>
++#include <cstdlib>
+ #include <pb_decode.h>
+ #include <pb_encode.h>
+ #include <string.h>
+@@ -378,8 +379,20 @@ extern SPIClass SPI1;
+ #endif
+ #endif
+ 
++#if defined(ARCH_PORTDUINO) && defined(__linux__)
++std::unique_ptr<RadioInterface> newRak2287UnixRadio();
++#endif
++
+ std::unique_ptr<RadioInterface> initLoRa()
+ {
++#if defined(ARCH_PORTDUINO) && defined(__linux__)
++    if (!portduino_config.force_simradio && std::getenv("MESHTASTIC_RADIO_SOCKET")) {
++        auto radio = newRak2287UnixRadio();
++        if (!radio->init())
++            exit(EXIT_FAILURE);
++        return radio;
++    }
++#endif
+     std::unique_ptr<RadioInterface> rIf = nullptr;
+ 
+ #if ARCH_PORTDUINO
+diff --git a/src/platform/portduino/PortduinoGlue.cpp b/src/platform/portduino/PortduinoGlue.cpp
+index fcf14c6..fc5f053 100644
+--- a/src/platform/portduino/PortduinoGlue.cpp
++++ b/src/platform/portduino/PortduinoGlue.cpp
+@@ -23,6 +23,7 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdio>
++#include <cstdlib>
+ #include <filesystem>
+ #include <fstream>
+ #include <iostream>
+@@ -587,6 +588,20 @@ void portduinoSetup()
+         return;
+     }
+ 
++#ifdef __linux__
++    if (std::getenv("MESHTASTIC_RADIO_SOCKET")) {
++        // The broker owns the SPI bus and radio GPIOs.
++        portduino_config.lora_module = use_simradio;
++        portduino_config.lora_spi_dev.clear();
++        for (auto *pin : portduino_config.all_pins)
++            if (pin->config_section == "Lora")
++                pin->enabled = false;
++        for (auto &pin : portduino_config.extra_pins)
++            if (pin.config_section == "Lora")
++                pin.enabled = false;
++    }
++#endif
++
+     // If LoRa `Module: auto` (default in config.yaml),
+     // attempt to auto config based on Product Strings
+     if (portduino_config.lora_module == use_autoconf) {

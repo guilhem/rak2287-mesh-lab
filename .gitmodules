@@ -1,0 +1,3 @@
+[submodule "deps/rak2287-radio"]
+	path = deps/rak2287-radio
+	url = https://github.com/guilhem/rak2287-radio.git
