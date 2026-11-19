@@ -43,10 +43,17 @@ to start the broker and observe traffic.
 In a four-minute black1 trial, the broker delivered 16 CRC-valid Meshtastic
 frames and four CRC-valid MeshCore frames. [Hardware trial](integration/shared-radio.md#hardware-trial)
 
-Transmission is off by default. The Paris profile was tested in receive-only
-mode because its nominal bandwidth overlaps French alarm sub-bands. Shared
-transmission was validated with the native applications and a simulated
-radio. [Transmission limits](integration/shared-radio.md#simulate-shared-transmission)
+On black1, a transmit dry run at 869.300 MHz (250 kHz, SF9, CR 4/5)
+loaded and read back a 23-byte Meshtastic frame in RF0's FIFO. The test
+intercepted `SetTx` before it reached the radio. Both receive chains
+resumed on their original profiles without a reset, 211 ms after the
+driver began pausing them.
+
+Transmission is off by default. The Paris channel overlaps French alarm
+sub-bands. Shared transmission has been exercised with the native
+applications and a simulated radio. RF transmission and decoding by a
+second node remain unverified for this profile.
+[Transmission limits](integration/shared-radio.md#simulate-shared-transmission)
 
 ## Integrate an application
 
